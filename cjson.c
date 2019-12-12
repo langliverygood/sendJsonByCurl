@@ -137,13 +137,39 @@ int main(int argc, char *argv[])
 	char *json, *retdata;
 	char url[4096];
 
+	cJSON* jsonout;
+
 	json = get_json(2, "10.172.33.23", "10.172.33.24");
 	sprintf(url, "%s", "http://paas.bk.com:80/api/c/compapi/v2/cc/search_host/");
 	retdata = calloc(1, sizeof (char));
 	_post_by_curl(url, json, &retdata);
 	delete_json(json);
 	
-	printf("%s\n", retdata);
+	//printf("%s\n", retdata);
+	jsonout = cJSON_Parse(retdata);
+	cJSON *arrayItem = cJSON_GetObjectItem(jsonout, "code");
+	if(arrayItem->valueint != 0)
+	{
+		printf("%s\n", "error");
+		return 0;
+	}
+	arrayItem = cJSON_GetObjectItem(jsonout, "data");
+	cJSON *countItem = cJSON_GetObjectItem(arrayItem, "count");
+	int count = countItem->valueint;
+	arrayItem = cJSON_GetObjectItem(arrayItem, "info");
+	cJSON * array;
+	cJSON *tmp;
+	int i;
+	for(i = 0; i < count; i++)
+	{
+		array = cJSON_GetArrayItem(arrayItem, i);
+		tmp = cJSON_GetObjectItem(array, "set");
+		//tmp = cJSON_GetObjectItem(tmp, "TopModuleName");
+		printf("json=%s\n", cJSON_Print(tmp));
+		printf("%s\n", cJSON_GetObjectItem(tmp, "bk_set_name")->valuestring);
+	}
+	cJSON_Delete(jsonout);
+	
 
 	return 0;
 }
