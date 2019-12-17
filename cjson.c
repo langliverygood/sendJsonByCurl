@@ -1,19 +1,21 @@
+#ifdef __cplusplus 
+extern "C" { 
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <unistd.h>
 #include <ctype.h>
 #include <malloc.h>
 #include <stdarg.h>
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
 
-#include <sys/socket.h>
-#include <netdb.h>
-#include <arpa/inet.h>
+#include "link.h"
+#include "cjson.h"
 
-static void json_format(char *str, int len)
+static void _json_format(char *str, int len)
 {
 	int i, j;
 	char *buf;
@@ -33,7 +35,7 @@ static void json_format(char *str, int len)
 	return;
 }
 
-static void delete_json(char *json)
+static void _delete_json(char *json)
 {
 	free(json);
 	json = NULL;
@@ -41,12 +43,13 @@ static void delete_json(char *json)
 	return;
 }
 
-static char *get_json(int ip_num, ...)
+static char *_get_json(int ip_num, ...)
 {
-	char * jsonout;
-	va_list args;
 	int i;
-	cJSON * json_root, *json_ip, *json_condition, *json_ip_data, *json_condition_data;
+	char *jsonout;
+	host_info_s hi;
+	va_list args;
+	cJSON *json_root, *json_ip, *json_condition, *json_ip_data, *json_condition_data;
 
 	/* 获取可变参数相关信息*/
 	va_start(args, ip_num);
@@ -58,13 +61,13 @@ static char *get_json(int ip_num, ...)
 	cJSON_AddStringToObject(json_root, "bk_app_code", "test");
 	cJSON_AddStringToObject(json_root, "bk_app_secret", "0d4c361b-510b-46ff-a2ed-adf6a718b500");
 	cJSON_AddStringToObject(json_root, "bk_username", "admin");
-	cJSON_AddNumberToObject(json_root, "bk_biz_id", 19);
 	cJSON_AddItemToObjectCS(json_root, "ip", json_ip);
 	json_condition = cJSON_AddArrayToObject(json_root, "condition");
 	json_ip_data = cJSON_AddArrayToObject(json_ip, "data");
 	for(i = 0; i < ip_num; i++)
 	{
-		cJSON_AddStringToObject(json_ip_data, "ip", va_arg(args, char *));
+		hi = va_arg(args, host_info_s);
+		//cJSON_AddStringToObject(json_ip_data, "ip", hi.ip);
 	}
 	va_end(args);
 	cJSON_AddNumberToObject(json_ip, "exact", 1);
@@ -78,9 +81,41 @@ static char *get_json(int ip_num, ...)
 	/* 销毁json对象，释放空间 */
 	cJSON_Delete(json_root);
 	/* 去掉json中的tab和换行 */
-	json_format(jsonout, strlen(jsonout));
+	_json_format(jsonout, strlen(jsonout));
 
 	return jsonout;
+}
+
+static char *_parse_json(char *raw_json)
+{
+	int i;
+	cJSON *jsonout, *retcode, *data, *count, *arrays, *array, *set, *bk_set_name;
+	
+	jsonout = cJSON_Parse(raw_json);
+	retcode = cJSON_GetObjectItem(jsonout, "code");
+	if(retcode->valueint != 0)
+	{
+		fprintf(stderr, "%s\n", "Returned code error!");
+		return NULL;
+	}
+	data = cJSON_GetObjectItem(jsonout, "data");
+	count = cJSON_GetObjectItem(data, "count");
+	arrays = cJSON_GetObjectItem(data, "info");
+
+	printf("%d\n", count->valueint);
+
+	link_init();
+	for(i = 0; i < count->valueint; i++)
+	{
+		array = cJSON_GetArrayItem(arrays, i);
+		set = cJSON_GetObjectItem(array, "set")->child;
+		bk_set_name = cJSON_GetObjectItemCaseSensitive(set, "bk_set_name");
+		link_insert(bk_set_name->valuestring, strlen(bk_set_name->valuestring));
+		//printf("%s\n", bk_set_name->valuestring);
+	}
+	cJSON_Delete(jsonout);
+
+	return NULL;
 }
 
 static int _writedata_curl(char *ptr, int size, int nmemb, void *userdata)
@@ -135,41 +170,46 @@ static int _post_by_curl(char *url, char *json, char **response)
 int main(int argc, char *argv[])
 {
 	char *json, *retdata;
-	char url[4096];
+	char *bk_set_name;
 
-	cJSON* jsonout;
-
-	json = get_json(2, "10.172.33.23", "10.172.33.24");
-	sprintf(url, "%s", "http://paas.bk.com:80/api/c/compapi/v2/cc/search_host/");
+	host_info_s s1, s2;
+	memset(&s1, 0, sizeof(s1));
+	memset(&s2, 0, sizeof(s2));
+	strcpy(s1.ip, "10.172.33.23");
+	strcpy(s2.ip, "10.172.49.1");
+	//json = _get_json(2, s1, s2);
+	json = _get_json(0);
 	retdata = calloc(1, sizeof (char));
-	_post_by_curl(url, json, &retdata);
-	delete_json(json);
-	
-	//printf("%s\n", retdata);
-	jsonout = cJSON_Parse(retdata);
-	cJSON *arrayItem = cJSON_GetObjectItem(jsonout, "code");
-	if(arrayItem->valueint != 0)
-	{
-		printf("%s\n", "error");
-		return 0;
-	}
-	arrayItem = cJSON_GetObjectItem(jsonout, "data");
-	cJSON *countItem = cJSON_GetObjectItem(arrayItem, "count");
-	int count = countItem->valueint;
-	arrayItem = cJSON_GetObjectItem(arrayItem, "info");
-	cJSON * array;
-	cJSON *tmp;
-	int i;
-	for(i = 0; i < count; i++)
-	{
-		array = cJSON_GetArrayItem(arrayItem, i);
-		tmp = cJSON_GetObjectItem(array, "set");
-		//tmp = cJSON_GetObjectItem(tmp, "TopModuleName");
-		printf("json=%s\n", cJSON_Print(tmp));
-		printf("%s\n", cJSON_GetObjectItem(tmp, "bk_set_name")->valuestring);
-	}
-	cJSON_Delete(jsonout);
-	
+	_post_by_curl(URL, json, &retdata);
+	_delete_json(json);
+	_parse_json(retdata);
 
+	bk_set_name = link_search(0);
+	if(bk_set_name == NULL)
+	{
+		strcpy(s1.set_name, "Unknown");
+	}
+	else
+	{
+		strcpy(s1.set_name, bk_set_name);
+	}
+
+	bk_set_name = link_search(1);
+	if(bk_set_name == NULL)
+	{
+		strcpy(s2.set_name, "Unknown");
+	}
+	else
+	{
+		strcpy(s2.set_name, bk_set_name);
+	}
+	printf("%s:%s\n", s1.ip, s1.set_name);
+	printf("%s:%s\n", s2.ip, s2.set_name);
+	link_delete();
+	
 	return 0;
 }
+
+#ifdef __cplusplus 
+} 
+#endif 
